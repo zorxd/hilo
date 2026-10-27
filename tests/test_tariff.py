@@ -3,10 +3,17 @@
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from homeassistant.components.select import (
+    DOMAIN as SELECT_DOMAIN,
+    SERVICE_SELECT_OPTION,
+)
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_mock_service,
+)
 
 from custom_components.hilo import Hilo
 from custom_components.hilo.const import (
@@ -38,6 +45,7 @@ def create_mock_hilo(hass: HomeAssistant, hq_plan_name: str = "flex d") -> Hilo:
     hilo.generate_energy_meters = True
     hilo.untarificated_devices = False
     hilo.track_unknown_sources = False
+    hilo.energy_meter_keys = []
     hilo.cost_sensors = {
         "low": DummyCostSensor(CONF_TARIFF["flex d"]["low"]),
         "medium": DummyCostSensor(CONF_TARIFF["flex d"]["medium"]),
@@ -251,3 +259,79 @@ def test_hilo_cost_total_sensor_tariff_config():
 
     with patch.object(hilo, "check_season", return_value=False):
         assert sensor.tariff_config == hilo.get_tariff_config()
+
+
+@pytest.mark.parametrize(
+    ("untarificated_devices", "expected_selects"),
+    [
+        pytest.param(
+            False,
+            [f"select.{HILO_ENERGY_TOTAL}", "select.outlet_hilo_energy"],
+            id="all_meters",
+        ),
+        pytest.param(True, [f"select.{HILO_ENERGY_TOTAL}"], id="untarificated"),
+    ],
+)
+async def test_check_tarif_switches_own_meters(
+    hass: HomeAssistant, untarificated_devices: bool, expected_selects: list[str]
+) -> None:
+    """Test check_tarif only changes the tariff selects of the integration's meters."""
+    hilo = create_mock_hilo(hass, "rate d")
+    hilo.untarificated_devices = untarificated_devices
+    hilo.energy_meter_keys = [HILO_ENERGY_TOTAL, "outlet_hilo_energy"]
+    for entity_id in (
+        f"select.{HILO_ENERGY_TOTAL}",
+        "select.outlet_hilo_energy",
+        "select.other_integration_hilo_energy",
+    ):
+        hass.states.async_set(entity_id, "medium")
+    calls = async_mock_service(hass, SELECT_DOMAIN, SERVICE_SELECT_OPTION)
+
+    with patch.object(hilo, "check_season", return_value=False):
+        hilo.check_tarif()
+    await hass.async_block_till_done()
+
+    assert [call.data["entity_id"] for call in calls] == expected_selects
+
+
+def power_device(
+    device_type: str, power: int | None, available: bool = True, model: str = "X"
+) -> MagicMock:
+    """Return a device reporting the given power."""
+    device = MagicMock(type=device_type, available=available, model=model)
+    device.has_attribute.side_effect = lambda attribute: attribute == "power"
+    device.get_value.return_value = power
+    return device
+
+
+@pytest.mark.parametrize(
+    "ignored_device",
+    [
+        pytest.param(
+            power_device("Thermostat", 900, available=False), id="unavailable"
+        ),
+        pytest.param(
+            power_device("Thermostat", 900, model="TH6250WF"), id="unmonitored"
+        ),
+        pytest.param(power_device("Thermostat", None), id="no_reading_value"),
+    ],
+)
+def test_unknown_power_is_meter_minus_known_devices(
+    hass: HomeAssistant, ignored_device: MagicMock
+) -> None:
+    """Test unknown power is the smart meter minus the devices Hilo reports."""
+    hilo = create_mock_hilo(hass)
+    hilo.unknown_tracker_device = power_device("Tracker", 77)
+    hilo.devices = MagicMock(
+        all=[
+            power_device("Meter", 5000),
+            power_device("Outlet", 1200),
+            ignored_device,
+            hilo.unknown_tracker_device,
+        ]
+    )
+
+    hilo.handle_unknown_power()
+
+    [readings] = hilo.devices.parse_values_received.call_args.args
+    assert readings[0]["value"] == 3800
