@@ -6,6 +6,7 @@ import asyncio
 from collections import OrderedDict
 import contextlib
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from aiohttp import CookieJar, client_exceptions
 from homeassistant.components.select import (
@@ -51,6 +52,7 @@ from pysignalr.exceptions import ServerError as SignalRServerError
 from .api import HiloAuth
 from .config_flow import STEP_OPTION_SCHEMA, HiloFlowHandler
 from .const import (
+    ACCOUNT_FILES,
     CONF_APPRECIATION_PHASE,
     CONF_CHALLENGE_LOCK,
     CONF_GENERATE_ENERGY_METERS,
@@ -72,11 +74,12 @@ from .const import (
     HILO_ENERGY_TOTAL,
     LOG,
     MIN_SCAN_INTERVAL,
+    STATE_FILE,
 )
 from .oauth2 import AuthCodeWithPKCEImplementation
 
 DISPATCHER_TOPIC_SIGNALR_EVENT = "pyhilo_signalr_event"
-SIGNAL_UPDATE_ENTITY = "pyhilo_device_update_{}"
+SIGNAL_UPDATE_ENTITY = "pyhilo_device_update_{}_{}"
 COORDINATOR_AWARE_PLATFORMS = [Platform.SENSOR]
 PLATFORMS = COORDINATOR_AWARE_PLATFORMS + [
     Platform.CLIMATE,
@@ -216,7 +219,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HiloConfigEntry) -> bool
                 config_entry_oauth2_flow.OAuth2Session(hass, entry, implementation)
             ),
             log_traces=current_options.get(CONF_LOG_TRACES, DEFAULT_LOG_TRACES),
-            state_yaml=hass.config.path("hilo_state.yaml"),
+            state_yaml=hass.config.path(STATE_FILE.format(entry.entry_id)),
         )
 
     except (TimeoutError, client_exceptions.ClientConnectorError) as err:
@@ -374,21 +377,58 @@ async def async_remove_config_entry_device(
     )
 
 
-async def async_migrate_entry(hass, config_entry: ConfigEntry):
-    """Migrate old entry."""
-    LOG.debug("Migrating from version %s", config_entry.version)
+def _delete_account_files(hass: HomeAssistant, entry_id: str) -> None:
+    """Delete the files holding a removed entry's state."""
+    for account_file in ACCOUNT_FILES.values():
+        Path(hass.config.path(account_file.format(entry_id))).unlink(missing_ok=True)
 
-    if config_entry.version > 1:
+
+def _move_legacy_account_files(hass: HomeAssistant, entry_id: str) -> None:
+    """Hand the files shared by all entries over to the migrated entry."""
+    for legacy_file, account_file in ACCOUNT_FILES.items():
+        legacy = Path(hass.config.path(legacy_file))
+        target = Path(hass.config.path(account_file.format(entry_id)))
+        if legacy.is_file() and not target.exists():
+            legacy.replace(target)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the files of a removed entry."""
+    await hass.async_add_executor_job(_delete_account_files, hass, entry.entry_id)
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old entry."""
+    LOG.debug(
+        "Migrating from version %s.%s",
+        config_entry.version,
+        config_entry.minor_version,
+    )
+
+    if config_entry.version > 2:
         # This means the user has downgraded from a future version
         return False
 
     if config_entry.version == 1:
-        config_entry.version = 2
         hass.config_entries.async_update_entry(
-            config_entry, unique_id="hilo", data={"auth_implementation": "hilo"}
+            config_entry,
+            unique_id=DOMAIN,
+            data={"auth_implementation": DOMAIN},
+            version=2,
+            minor_version=1,
         )
 
-    LOG.debug("Migration to version %s successful", config_entry.version)
+    if config_entry.minor_version < 2:
+        await hass.async_add_executor_job(
+            _move_legacy_account_files, hass, config_entry.entry_id
+        )
+        hass.config_entries.async_update_entry(config_entry, minor_version=2)
+
+    LOG.debug(
+        "Migration to version %s.%s successful",
+        config_entry.version,
+        config_entry.minor_version,
+    )
 
     return True
 
@@ -571,7 +611,8 @@ class Hilo:
             # runs (scan_interval) to have updated data in the dashboard.
             for device in updated_devices:
                 async_dispatcher_send(
-                    self._hass, SIGNAL_UPDATE_ENTITY.format(device.id)
+                    self._hass,
+                    SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, device.id),
                 )
 
         elif event.target == "DeviceListInitialValuesReceived":
@@ -605,7 +646,8 @@ class Hilo:
             updated_devices = self.devices.parse_values_received(event.arguments[0])
             for device in updated_devices:
                 async_dispatcher_send(
-                    self._hass, SIGNAL_UPDATE_ENTITY.format(device.id)
+                    self._hass,
+                    SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, device.id),
                 )
 
     @callback
@@ -1332,4 +1374,6 @@ class Hilo:
     @callback
     def handle_subscription_result(self, hilo_id: str) -> None:
         """Handle subscription result by notifying entities."""
-        async_dispatcher_send(self._hass, SIGNAL_UPDATE_ENTITY.format(hilo_id))
+        async_dispatcher_send(
+            self._hass, SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, hilo_id)
+        )

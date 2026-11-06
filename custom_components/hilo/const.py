@@ -36,6 +36,17 @@ DEFAULT_TRACK_UNKNOWN_SOURCES = False
 CONF_UNTARIFICATED_DEVICES = "untarificated_devices"
 DEFAULT_UNTARIFICATED_DEVICES = False
 
+# Per-entry files, formatted with the config entry ID. The legacy names
+# predate per-entry storage and are handed over to the migrated entry.
+STATE_FILE = "hilo_state_{}.yaml"
+LEGACY_STATE_FILE = "hilo_state.yaml"
+EVENT_HISTORY_FILE = "hilo_eventhistory_state_{}.yaml"
+LEGACY_EVENT_HISTORY_FILE = "hilo_eventhistory_state.yaml"
+ACCOUNT_FILES = {
+    LEGACY_STATE_FILE: STATE_FILE,
+    LEGACY_EVENT_HISTORY_FILE: EVENT_HISTORY_FILE,
+}
+
 DEFAULT_SCAN_INTERVAL = 300
 EVENT_SCAN_INTERVAL = 1800
 # During reduction phase, let's refresh the current challenge event

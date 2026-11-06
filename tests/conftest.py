@@ -92,6 +92,7 @@ def mock_config_entry() -> MockConfigEntry:
         data={"auth_implementation": "hilo", "token": "123"},
         unique_id="hilo",
         version=2,
+        minor_version=2,
     )
 
 

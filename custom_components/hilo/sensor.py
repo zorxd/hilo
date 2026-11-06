@@ -64,6 +64,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_UNTARIFICATED_DEVICES,
     DOMAIN,
+    EVENT_HISTORY_FILE,
     EVENT_SCAN_INTERVAL_REDUCTION,
     HILO_ENERGY_TOTAL,
     HILO_SENSOR_CLASSES,
@@ -755,7 +756,7 @@ class HiloRewardSensor(HiloEntity, RestoreEntity, SensorEntity):
         )
         LOG.debug("Setting up RewardSensor entity: %s", self._attr_name)
         self._history_state_yaml: str = hilo._hass.config.path(
-            "hilo_eventhistory_state.yaml"
+            EVENT_HISTORY_FILE.format(hilo.entry.entry_id)
         )
         self.scan_interval = timedelta(seconds=REWARD_SCAN_INTERVAL)
         self._state = 0

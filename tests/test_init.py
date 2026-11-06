@@ -1,5 +1,6 @@
 """Test component setup."""
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from homeassistant.const import Platform
@@ -10,7 +11,11 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
-from custom_components.hilo.const import CONF_TRACK_UNKNOWN_SOURCES, DOMAIN
+from custom_components.hilo.const import (
+    ACCOUNT_FILES,
+    CONF_TRACK_UNKNOWN_SOURCES,
+    DOMAIN,
+)
 
 from . import setup_with_selected_platforms
 
@@ -94,3 +99,57 @@ async def test_remove_config_entry_device_unknown_source_tracker(
 
     assert response["success"] is False
     assert device_registry.async_get(device_entry.id) is not None
+
+
+@pytest.mark.usefixtures("mock_setup_entry")
+@pytest.mark.parametrize(
+    ("legacy_file", "entry_file"),
+    [
+        pytest.param("hilo_state.yaml", "hilo_state_{}.yaml", id="api_state"),
+        pytest.param(
+            "hilo_eventhistory_state.yaml",
+            "hilo_eventhistory_state_{}.yaml",
+            id="event_history",
+        ),
+    ],
+)
+async def test_migration_hands_files_to_entry(
+    hass: HomeAssistant, tmp_path: Path, legacy_file: str, entry_file: str
+) -> None:
+    """Test the files shared by all entries become the migrated entry's files."""
+    hass.config.config_dir = str(tmp_path)
+    (tmp_path / legacy_file).write_text("legacy: true\n")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"auth_implementation": DOMAIN, "token": "123"},
+        unique_id=DOMAIN,
+        version=2,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(entry.entry_id)
+
+    assert entry.minor_version == 2
+    assert not (tmp_path / legacy_file).exists()
+    assert (tmp_path / entry_file.format(entry.entry_id)).read_text() == (
+        "legacy: true\n"
+    )
+
+
+@pytest.mark.usefixtures("mock_setup_entry")
+async def test_remove_entry_deletes_entry_files(
+    hass: HomeAssistant, tmp_path: Path, mock_config_entry: MockConfigEntry
+) -> None:
+    """Test removing an entry deletes only that entry's files."""
+    hass.config.config_dir = str(tmp_path)
+    mock_config_entry.add_to_hass(hass)
+    for entry_file in ACCOUNT_FILES.values():
+        (tmp_path / entry_file.format(mock_config_entry.entry_id)).touch()
+        (tmp_path / entry_file.format("other_entry")).touch()
+
+    await hass.config_entries.async_remove(mock_config_entry.entry_id)
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
+        entry_file.format("other_entry") for entry_file in ACCOUNT_FILES.values()
+    )

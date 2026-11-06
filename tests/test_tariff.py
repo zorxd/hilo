@@ -189,6 +189,7 @@ async def test_sensor_rates_flex_d_initialization(
         },
         unique_id="hilo",
         version=2,
+        minor_version=2,
     )
 
     expected_low = (
@@ -202,6 +203,7 @@ async def test_sensor_rates_flex_d_initialization(
     expected_high = CONF_TARIFF["flex d"]["high"]
 
     hilo = create_mock_hilo(hass, "flex d")
+    hilo.entry = entry
     hilo.coordinator = MagicMock()
     hilo.register_signalr_listener = MagicMock()
     gateway = MagicMock()

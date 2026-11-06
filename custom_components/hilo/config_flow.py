@@ -78,6 +78,7 @@ class HiloFlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     DOMAIN = DOMAIN
     VERSION = 2
+    MINOR_VERSION = 2
 
     _reauth_entry: ConfigEntry | None = None
 
