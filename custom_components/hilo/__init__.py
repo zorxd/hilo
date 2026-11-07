@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiohttp import CookieJar, client_exceptions
@@ -33,7 +34,7 @@ from homeassistant.helpers import (
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-from homeassistant.util import dt as dt_util
+from homeassistant.util import dt as dt_util, slugify
 from packaging.version import Version
 from pyhilo import API
 from pyhilo.const import UNMONITORED_DEVICES
@@ -47,8 +48,10 @@ from pyhilo.util import from_utc_timestamp, time_diff
 from pysignalr.exceptions import ServerError as SignalRServerError
 
 from .api import HiloAuth
-from .config_flow import STEP_OPTION_SCHEMA, HiloFlowHandler
+from .config_flow import STEP_OPTION_SCHEMA, HiloFlowHandler, account_id
 from .const import (
+    ACCOUNT_FILES,
+    CONF_ACCOUNT_LABEL,
     CONF_APPRECIATION_PHASE,
     CONF_CHALLENGE_LOCK,
     CONF_GENERATE_ENERGY_METERS,
@@ -70,6 +73,7 @@ from .const import (
     HILO_ENERGY_TOTAL,
     LOG,
     MIN_SCAN_INTERVAL,
+    STATE_FILE,
 )
 from .oauth2 import AuthCodeWithPKCEImplementation
 
@@ -77,7 +81,7 @@ if TYPE_CHECKING:
     from .sensor import HiloChallengeSensor
 
 DISPATCHER_TOPIC_SIGNALR_EVENT = "pyhilo_signalr_event"
-SIGNAL_UPDATE_ENTITY = "pyhilo_device_update_{}"
+SIGNAL_UPDATE_ENTITY = "pyhilo_device_update_{}_{}"
 COORDINATOR_AWARE_PLATFORMS = [Platform.SENSOR]
 PLATFORMS = COORDINATOR_AWARE_PLATFORMS + [
     Platform.CLIMATE,
@@ -133,7 +137,7 @@ def _async_standardize_config_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
 
 @callback
 def _async_register_custom_device(
-    hass: HomeAssistant, entry: ConfigEntry, device: HiloDevice
+    hass: HomeAssistant, entry: ConfigEntry, device: HiloDevice, name: str
 ) -> None:
     """Register a custom device.
 
@@ -146,7 +150,7 @@ def _async_register_custom_device(
         identifiers={(DOMAIN, device.identifier)},
         manufacturer=device.manufacturer,
         model=device.model,
-        name=device.name,
+        name=name,
     )
 
 
@@ -217,7 +221,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HiloConfigEntry) -> bool
                 config_entry_oauth2_flow.OAuth2Session(hass, entry, implementation)
             ),
             log_traces=current_options.get(CONF_LOG_TRACES, DEFAULT_LOG_TRACES),
-            state_yaml=hass.config.path("hilo_state.yaml"),
+            state_yaml=hass.config.path(STATE_FILE.format(entry.unique_id)),
         )
 
     except (TimeoutError, client_exceptions.ClientConnectorError) as err:
@@ -264,26 +268,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: HiloConfigEntry) -> bool
         "sensor.hilo_gateway_hilo_cost_total": "sensor.hilo_cost_total",
         "sensor.hilo_gateway": "sensor.hilo_gateway",
     }
-    for old_id, new_id in gateway_entity_renames.items():
-        if old_id == new_id or not entity_registry.async_get(old_id):
-            continue
-        if entity_registry.async_get(new_id):
-            LOG.info(
-                "Skipping migration %s -> %s, target entity ID already registered",
-                old_id,
-                new_id,
-            )
-
-            continue
-        entity_registry.async_update_entity(old_id, new_entity_id=new_id)
-        LOG.info("Migrated entity ID %s -> %s", old_id, new_id)
-
     # Note (ic-dev21): this new renaming by HA also breaks sensor.hilo_energy_total, which is used in check_tarif
     energy_entity_renames = {
         "sensor.meter00_hilo_energy_total": "sensor.hilo_energy_total"
     }
-    for old_id, new_id in energy_entity_renames.items():
-        if old_id == new_id or not entity_registry.async_get(old_id):
+    for old_id, new_id in {**gateway_entity_renames, **energy_entity_renames}.items():
+        old_entry = entity_registry.async_get(old_id)
+        if (
+            old_id == new_id
+            or not old_entry
+            or old_entry.config_entry_id != entry.entry_id
+        ):
             continue
         if entity_registry.async_get(new_id):
             LOG.info(
@@ -375,21 +370,57 @@ async def async_remove_config_entry_device(
     )
 
 
-async def async_migrate_entry(hass, config_entry: ConfigEntry):
-    """Migrate old entry."""
-    LOG.debug("Migrating from version %s", config_entry.version)
+def _move_legacy_account_files(hass: HomeAssistant, account: str) -> None:
+    """Hand the single-account files over to the migrated account."""
+    for legacy_file, account_file in ACCOUNT_FILES.items():
+        legacy = Path(hass.config.path(legacy_file))
+        target = Path(hass.config.path(account_file.format(account)))
+        if legacy.is_file() and not target.exists():
+            legacy.replace(target)
 
-    if config_entry.version > 1:
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old entry."""
+    LOG.debug(
+        "Migrating from version %s.%s",
+        config_entry.version,
+        config_entry.minor_version,
+    )
+
+    if config_entry.version > 2:
         # This means the user has downgraded from a future version
         return False
 
     if config_entry.version == 1:
-        config_entry.version = 2
         hass.config_entries.async_update_entry(
-            config_entry, unique_id="hilo", data={"auth_implementation": "hilo"}
+            config_entry,
+            unique_id=DOMAIN,
+            data={"auth_implementation": DOMAIN},
+            version=2,
+            minor_version=1,
         )
 
-    LOG.debug("Migration to version %s successful", config_entry.version)
+    if config_entry.minor_version < 3:
+        # Entries without a token (migrated from version 1) keep the legacy
+        # unique_id until reauth reveals which account they belong to.
+        unique_id = config_entry.unique_id
+        if token := config_entry.data.get("token"):
+            unique_id = account_id(token["access_token"])
+            await hass.async_add_executor_job(
+                _move_legacy_account_files, hass, unique_id
+            )
+        hass.config_entries.async_update_entry(
+            config_entry,
+            unique_id=unique_id,
+            data={CONF_ACCOUNT_LABEL: "", **config_entry.data},
+            minor_version=3,
+        )
+
+    LOG.debug(
+        "Migration to version %s.%s successful",
+        config_entry.version,
+        config_entry.minor_version,
+    )
 
     return True
 
@@ -402,6 +433,8 @@ class Hilo:
         self._api = api
         self._hass = hass
         self.entry = entry
+        account_label = entry.data[CONF_ACCOUNT_LABEL]
+        self.name_prefix = f"{account_label} " if account_label else ""
         self.devices: Devices = Devices(api)
         self.graphql_helper: GraphQlHelper = GraphQlHelper(api, self.devices)
         self.challenge_id = 0
@@ -430,7 +463,7 @@ class Hilo:
         # These get filled in by the sensor platform:
         self.challenge_sensor: HiloChallengeSensor | None = None
         self.energy_meter_keys: list[str] = []
-        self.total_meter_key = HILO_ENERGY_TOTAL
+        self.total_meter_key = self.entity_object_id(HILO_ENERGY_TOTAL)
         # This will get filled in by async_init:
         self.coordinator: DataUpdateCoordinator | None = None
         self.unknown_tracker_device: HiloDevice | None = None
@@ -438,6 +471,10 @@ class Hilo:
         if self.track_unknown_sources:
             self._api._get_device_callbacks = [self._get_unknown_source_tracker]
         self._signalr_listeners = []
+
+    def entity_object_id(self, name: str) -> str:
+        """Return the object_id Home Assistant derives from an entity name."""
+        return slugify(f"{self.name_prefix}{name}")
 
     async def _on_devices_connected(self) -> None:
         """Trigger device subscriptions after the device hub connects."""
@@ -575,7 +612,8 @@ class Hilo:
             # runs (scan_interval) to have updated data in the dashboard.
             for device in updated_devices:
                 async_dispatcher_send(
-                    self._hass, SIGNAL_UPDATE_ENTITY.format(device.hilo_id)
+                    self._hass,
+                    SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, device.hilo_id),
                 )
 
         elif event.target == "DeviceListInitialValuesReceived":
@@ -609,7 +647,8 @@ class Hilo:
             updated_devices = self.devices.parse_values_received(event.arguments[0])
             for device in updated_devices:
                 async_dispatcher_send(
-                    self._hass, SIGNAL_UPDATE_ENTITY.format(device.hilo_id)
+                    self._hass,
+                    SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, device.hilo_id),
                 )
 
     @callback
@@ -758,7 +797,7 @@ class Hilo:
             "settableAttributes": "",
             "id": 69420,
             "hilo_id": "AB-A2025",
-            "identifier": "hass-hilo-unknown_source_tracker",
+            "identifier": f"hass-hilo-{self.entity_object_id('unknown_source_tracker')}",
             "provider": 0,
             "model_number": "Hass-hilo-2025.5",
             "sw_version": "0.0.1",
@@ -808,6 +847,7 @@ class Hilo:
         returns its old DSN-based identifier if it exists. If it doesn't,
         it returns None to use the MAC address instead."""
         device_registry = dr.async_get(self._hass)
+        # Other accounts' gateways must never be mistaken for our legacy one.
         for device in dr.async_entries_for_config_entry(
             device_registry, self.entry.entry_id
         ):
@@ -892,7 +932,9 @@ class Hilo:
                     self._hass, self.entry, old_dsn, gateway.identifier
                 )
                 self.async_migrate_gateway_entities(old_dsn, gateway.identifier)
-        _async_register_custom_device(self._hass, self.entry, gateway)
+        _async_register_custom_device(
+            self._hass, self.entry, gateway, f"{self.name_prefix}{gateway.name}"
+        )
 
         if self.track_unknown_sources:
             if not self.unknown_tracker_device:
@@ -901,7 +943,10 @@ class Hilo:
                 )
                 self.unknown_tracker_device.net_consumption = True
             _async_register_custom_device(
-                self._hass, self.entry, self.unknown_tracker_device
+                self._hass,
+                self.entry,
+                self.unknown_tracker_device,
+                f"{self.name_prefix}{self.unknown_tracker_device.name}",
             )
 
         async def signalr_disconnect_listener(_: Event) -> None:
@@ -1195,6 +1240,11 @@ class Hilo:
         ) is None:
             LOG.debug("Unique ID %s does not need to be migrated", old_unique_id)
             return
+        # Legacy unique IDs were derived from names alone, so they can belong
+        # to another account's entry.
+        if entity_registry.async_get(entity_id).config_entry_id != self.entry.entry_id:
+            LOG.debug("Unique ID %s belongs to another account", old_unique_id)
+            return
         if new_entity_id := entity_registry.async_get_entity_id(
             platform, DOMAIN, new_unique_id
         ):
@@ -1218,4 +1268,6 @@ class Hilo:
     @callback
     def handle_subscription_result(self, hilo_id: str) -> None:
         """Handle subscription result by notifying entities."""
-        async_dispatcher_send(self._hass, SIGNAL_UPDATE_ENTITY.format(hilo_id))
+        async_dispatcher_send(
+            self._hass, SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, hilo_id)
+        )
