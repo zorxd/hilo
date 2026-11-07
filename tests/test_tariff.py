@@ -45,6 +45,7 @@ def create_mock_hilo(hass: HomeAssistant, hq_plan_name: str = "flex d") -> Hilo:
     hilo.untarificated_devices = False
     hilo.track_unknown_sources = False
     hilo.energy_meter_keys = []
+    hilo.total_meter_key = HILO_ENERGY_TOTAL
     hilo.challenge_sensor = None
     hilo.cost_sensors = {
         "low": DummyCostSensor(CONF_TARIFF["flex d"]["low"]),
@@ -152,6 +153,19 @@ def test_check_tarif_low_medium_selection(
         hilo.check_tarif()
 
     assert hilo.cost_sensors["current"]._cost == CONF_TARIFF["rate d"][expected_tier]
+
+
+def test_check_tarif_reads_registered_total_meter(hass: HomeAssistant) -> None:
+    """Test check_tarif reads the daily usage of the total meter it created."""
+    hilo = create_mock_hilo(hass, "flex d")
+    hilo.total_meter_key = "compteur_hilo_energy"
+    threshold = CONF_TARIFF["flex d"]["low_threshold"]
+    hass.states.async_set("sensor.compteur_hilo_energy_low", str(threshold + 5.0))
+
+    with patch.object(hilo, "check_season", return_value=False):
+        hilo.check_tarif()
+
+    assert hilo.cost_sensors["current"]._cost == CONF_TARIFF["rate d"]["medium"]
 
 
 def test_check_tarif_high_tier_during_challenge(hass: HomeAssistant):
