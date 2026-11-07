@@ -17,12 +17,15 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.hilo import Hilo
 from custom_components.hilo.const import (
+    CONF_ACCOUNT_LABEL,
     CONF_GENERATE_ENERGY_METERS,
     CONF_TARIFF,
     DOMAIN,
     HILO_ENERGY_TOTAL,
 )
 from custom_components.hilo.sensor import HiloCostTotalSensor, async_setup_entry
+
+from . import ACCOUNT_EMAIL, account_id, oauth_token
 
 
 class DummyCostSensor:
@@ -44,6 +47,7 @@ def create_mock_hilo(hass: HomeAssistant, hq_plan_name: str = "flex d") -> Hilo:
     hilo.generate_energy_meters = True
     hilo.untarificated_devices = False
     hilo.track_unknown_sources = False
+    hilo.name_prefix = ""
     hilo.energy_meter_keys = []
     hilo.total_meter_key = HILO_ENERGY_TOTAL
     hilo.challenge_sensor = None
@@ -241,13 +245,17 @@ async def test_sensor_rates_flex_d_initialization(
     """Test that flex d sensors initialize with correct seasonal rates right away."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"auth_implementation": "hilo", "token": "123"},
+        data={
+            "auth_implementation": DOMAIN,
+            "token": oauth_token(ACCOUNT_EMAIL),
+            CONF_ACCOUNT_LABEL: "",
+        },
         options={
             CONF_GENERATE_ENERGY_METERS: True,
         },
-        unique_id="hilo",
+        unique_id=account_id(ACCOUNT_EMAIL),
         version=2,
-        minor_version=2,
+        minor_version=3,
     )
 
     expected_low = (

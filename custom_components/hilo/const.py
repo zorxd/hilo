@@ -8,6 +8,10 @@ LOG = logging.getLogger(__package__)
 DOMAIN = "hilo"
 HILO_ENERGY_TOTAL = "hilo_energy_total"
 
+# Prefixes entity names of every account added after the first one, so that
+# name-derived entity_ids (energy meters, cost sensors) never collide.
+CONF_ACCOUNT_LABEL = "account_label"
+
 # Configurations
 CONF_APPRECIATION_PHASE = "appreciation_phase"
 DEFAULT_APPRECIATION_PHASE = 0

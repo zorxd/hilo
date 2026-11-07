@@ -13,11 +13,12 @@ from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from custom_components.hilo.const import (
     ACCOUNT_FILES,
+    CONF_ACCOUNT_LABEL,
     CONF_TRACK_UNKNOWN_SOURCES,
     DOMAIN,
 )
 
-from . import setup_with_selected_platforms
+from . import ACCOUNT_EMAIL, account_id, oauth_token, setup_with_selected_platforms
 
 
 async def test_async_setup(hass):
@@ -121,7 +122,7 @@ async def test_migration_hands_files_to_entry(
     (tmp_path / legacy_file).write_text("legacy: true\n")
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"auth_implementation": DOMAIN, "token": "123"},
+        data={"auth_implementation": DOMAIN, "token": oauth_token(ACCOUNT_EMAIL)},
         unique_id=DOMAIN,
         version=2,
         minor_version=1,
@@ -130,7 +131,7 @@ async def test_migration_hands_files_to_entry(
 
     await hass.config_entries.async_setup(entry.entry_id)
 
-    assert entry.minor_version == 2
+    assert entry.minor_version == 3
     assert not (tmp_path / legacy_file).exists()
     assert (tmp_path / entry_file.format(entry.entry_id)).read_text() == (
         "legacy: true\n"
@@ -153,3 +154,45 @@ async def test_remove_entry_deletes_entry_files(
     assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
         entry_file.format("other_entry") for entry_file in ACCOUNT_FILES.values()
     )
+
+
+@pytest.mark.usefixtures("mock_setup_entry")
+@pytest.mark.parametrize(
+    ("minor_version", "unique_id", "data", "expected_label"),
+    [
+        pytest.param(1, DOMAIN, {}, "", id="single_account"),
+        pytest.param(
+            2,
+            ACCOUNT_EMAIL,
+            {CONF_ACCOUNT_LABEL: "Chalet"},
+            "Chalet",
+            id="keyed_by_email",
+        ),
+    ],
+)
+async def test_migration_keys_entry_by_account_id(
+    hass: HomeAssistant,
+    minor_version: int,
+    unique_id: str,
+    data: dict[str, str],
+    expected_label: str,
+) -> None:
+    """Test entries are keyed by the account ID and keep their label."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "auth_implementation": DOMAIN,
+            "token": oauth_token(ACCOUNT_EMAIL),
+            **data,
+        },
+        unique_id=unique_id,
+        version=2,
+        minor_version=minor_version,
+    )
+    entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(entry.entry_id)
+
+    assert entry.minor_version == 3
+    assert entry.unique_id == account_id(ACCOUNT_EMAIL)
+    assert entry.data[CONF_ACCOUNT_LABEL] == expected_label

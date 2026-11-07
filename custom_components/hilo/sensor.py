@@ -171,14 +171,15 @@ async def async_setup_entry(
         energy_manager = await EnergyManager().init(hass, energy_meter_period)
         utility_manager = UtilityManager(hass, energy_meter_period, default_tariff_list)
 
+    total_meter_key = hilo.entity_object_id(HILO_ENERGY_TOTAL)
     hilo.energy_meter_keys = []
     entity_registry = er.async_get(hass)
 
     def create_energy_entity(hilo, device):
         device._energy_entity = EnergySensor(hilo, device, hass)
         new_entities.append(device._energy_entity)
-        energy_entity = f"{slugify(device.name)}_hilo_energy"
-        if energy_entity == HILO_ENERGY_TOTAL:
+        energy_entity = f"{hilo.entity_object_id(device.name)}_hilo_energy"
+        if energy_entity == total_meter_key:
             LOG.error(
                 "An hilo entity can't be named 'total' because it conflicts "
                 "with the generated name for the smart energy meter"
@@ -186,7 +187,7 @@ async def async_setup_entry(
             return
         tariff_list = default_tariff_list
         if device.type == "Meter":
-            energy_entity = HILO_ENERGY_TOTAL
+            energy_entity = total_meter_key
             tariff_list = validate_tariff_list(tariff_config)
         # The registry keeps an energy sensor's entity_id when its device is
         # renamed in the Hilo app, and utility meters must follow that sensor.
@@ -336,7 +337,7 @@ class EnergySensor(IntegrationSensor):
     def __init__(self, hilo, device, hass):
         """Hilo Energy sensor initialization."""
         self._device = device
-        self._attr_name = f"{device.name} Hilo Energy"
+        self._attr_name = f"{hilo.name_prefix}{device.name} Hilo Energy"
         old_unique_id = f"hilo_energy_{slugify(device.name)}"
         self._attr_unique_id = f"{device.identifier.lower()}-energy"
         hilo.async_migrate_unique_id(
@@ -351,7 +352,9 @@ class EnergySensor(IntegrationSensor):
         self._suggested_display_precision = 2
 
         if device.type == "Meter":
-            self._attr_name = HILO_ENERGY_TOTAL
+            self._attr_name = f"{hilo.name_prefix}{HILO_ENERGY_TOTAL}"
+        # Utility meters use this entity_id as their source.
+        self.entity_id = f"sensor.{slugify(self._attr_name)}"
 
         power_unique_id = f"{device.identifier.lower()}-power"
         entity_registry = er.async_get(hass)
@@ -361,7 +364,7 @@ class EnergySensor(IntegrationSensor):
                 for entry in entity_registry.entities.values()
                 if entry.unique_id == power_unique_id and entry.platform == DOMAIN
             ),
-            f"sensor.{slugify(device.name)}_power",  # fallback
+            f"sensor.{hilo.entity_object_id(device.name)}_power",  # fallback
         )
         # ic-dev21: Set initial state and last_valid_state, removes log errors and unavailable states
         initial_state = 0
@@ -661,7 +664,6 @@ class HiloNotificationSensor(HiloEntity, RestoreEntity, SensorEntity):
     def __init__(self, hilo, device, scan_interval):
         """Hilo Notification sensor initialization."""
         self._attr_name = "Notifications Hilo"
-        super().__init__(hilo, name=self._attr_name, device=device)
         old_unique_id = slugify(self._attr_name)
         self._attr_unique_id = f"{device.identifier.lower()}-{slugify(self._attr_name)}"
         hilo.async_migrate_unique_id(
@@ -672,6 +674,7 @@ class HiloNotificationSensor(HiloEntity, RestoreEntity, SensorEntity):
             self._attr_unique_id,
             Platform.SENSOR,
         )
+        super().__init__(hilo, name=self._attr_name, device=device)
         LOG.debug("Setting up NotificationSensor entity: %s", self._attr_name)
         self.scan_interval = timedelta(seconds=NOTIFICATION_SCAN_INTERVAL)
         self._state = 0
@@ -754,7 +757,6 @@ class HiloRewardSensor(HiloEntity, RestoreEntity, SensorEntity):
         else:
             self._attr_native_unit_of_measurement = "CAD"
 
-        super().__init__(hilo, name=self._attr_name, device=device)
         old_unique_id = slugify(self._attr_name)
         self._attr_unique_id = f"{device.identifier.lower()}-{slugify(self._attr_name)}"
         hilo.async_migrate_unique_id(
@@ -765,6 +767,7 @@ class HiloRewardSensor(HiloEntity, RestoreEntity, SensorEntity):
             self._attr_unique_id,
             Platform.SENSOR,
         )
+        super().__init__(hilo, name=self._attr_name, device=device)
         LOG.debug("Setting up RewardSensor entity: %s", self._attr_name)
         self._history_state_yaml: str = hilo._hass.config.path(
             EVENT_HISTORY_FILE.format(hilo.entry.entry_id)
@@ -1011,7 +1014,6 @@ class HiloChallengeSensor(HiloEntity, SensorEntity):
             "completed",
             "unknown",
         ]
-        super().__init__(hilo, name=self._attr_name, device=device)
         old_unique_id = slugify(self._attr_name)
         self._attr_unique_id = f"{device.identifier.lower()}-{slugify(self._attr_name)}"
         hilo.async_migrate_unique_id(
@@ -1022,6 +1024,7 @@ class HiloChallengeSensor(HiloEntity, SensorEntity):
             self._attr_unique_id,
             Platform.SENSOR,
         )
+        super().__init__(hilo, name=self._attr_name, device=device)
         LOG.debug("Setting up ChallengeSensor entity: %s", self._attr_name)
         self.scan_interval = timedelta(seconds=EVENT_SCAN_INTERVAL_REDUCTION)
         self._state = "off"
@@ -1496,7 +1499,6 @@ class HiloOutdoorTempSensor(HiloEntity, SensorEntity):
     def __init__(self, hilo, device, scan_interval):
         """Initialize."""
         self._attr_name = "Outdoor Weather Hilo"
-        super().__init__(hilo, name=self._attr_name, device=device)
         old_unique_id = slugify(self._attr_name)
         self._attr_unique_id = f"{device.identifier.lower()}-{slugify(self._attr_name)}"
         hilo.async_migrate_unique_id(
@@ -1507,6 +1509,7 @@ class HiloOutdoorTempSensor(HiloEntity, SensorEntity):
             self._attr_unique_id,
             Platform.SENSOR,
         )
+        super().__init__(hilo, name=self._attr_name, device=device)
         LOG.debug("Setting up OutdoorWeatherSensor entity: %s", self._attr_name)
         self.scan_interval = timedelta(seconds=WEATHER_SCAN_INTERVAL)
         self._state = STATE_UNKNOWN

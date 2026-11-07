@@ -1,11 +1,32 @@
 """Tests for the Hilo custom integration."""
 
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+import uuid
 
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+import jwt
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+ACCOUNT_EMAIL = "first.account@example.com"
+
+
+def account_id(email: str) -> str:
+    """Return the Hilo account ID the tests give to the account of an email."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, email))
+
+
+def oauth_token(email: str, sub: str | None = None) -> dict[str, str | int]:
+    """Return an OAuth token whose access token identifies the given account."""
+    claims = {"email": email, "sub": sub or account_id(email)}
+    return {
+        "access_token": jwt.encode(claims, "secret", algorithm="HS256"),
+        "refresh_token": "mock-refresh-token",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "expires_at": 4102444800,
+    }
 
 
 @pytest.mark.usefixtures("mock_api")
