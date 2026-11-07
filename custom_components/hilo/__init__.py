@@ -470,6 +470,7 @@ class Hilo:
         # These get filled in by the sensor platform:
         self.challenge_sensor: HiloChallengeSensor | None = None
         self.energy_meter_keys: list[str] = []
+        self.total_meter_key = HILO_ENERGY_TOTAL
         # This will get filled in by async_init:
         self.coordinator: DataUpdateCoordinator | None = None
         self.unknown_tracker_device: HiloDevice | None = None
@@ -1110,7 +1111,7 @@ class Hilo:
                         )
 
         tarif = "low"
-        base_sensor = f"sensor.{HILO_ENERGY_TOTAL}_low"
+        base_sensor = f"sensor.{self.total_meter_key}_low"
         energy_used = self._hass.states.get(base_sensor)
         if energy_used and energy_used.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             try:
@@ -1153,7 +1154,7 @@ class Hilo:
         )
 
         for meter_key in self.energy_meter_keys:
-            if self.untarificated_devices and meter_key != HILO_ENERGY_TOTAL:
+            if self.untarificated_devices and meter_key != self.total_meter_key:
                 continue
             self.set_tarif(f"select.{meter_key}", tarif)
 

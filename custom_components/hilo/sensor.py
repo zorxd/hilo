@@ -172,6 +172,7 @@ async def async_setup_entry(
         utility_manager = UtilityManager(hass, energy_meter_period, default_tariff_list)
 
     hilo.energy_meter_keys = []
+    entity_registry = er.async_get(hass)
 
     def create_energy_entity(hilo, device):
         device._energy_entity = EnergySensor(hilo, device, hass)
@@ -187,6 +188,14 @@ async def async_setup_entry(
         if device.type == "Meter":
             energy_entity = HILO_ENERGY_TOTAL
             tariff_list = validate_tariff_list(tariff_config)
+        # The registry keeps an energy sensor's entity_id when its device is
+        # renamed in the Hilo app, and utility meters must follow that sensor.
+        if entity_id := entity_registry.async_get_entity_id(
+            Platform.SENSOR, DOMAIN, device._energy_entity.unique_id
+        ):
+            energy_entity = entity_id.removeprefix("sensor.")
+        if device.type == "Meter":
+            hilo.total_meter_key = energy_entity
         net_consumption = device.net_consumption
         utility_manager.add_meter(energy_entity, tariff_list, net_consumption)
         hilo.energy_meter_keys.append(energy_entity)
@@ -1405,7 +1414,7 @@ class HiloCostTotalSensor(HiloEntity, SensorEntity):
             rate = self.tariff_config.get(tarif, 0)
             if rate <= 0:
                 continue
-            energy_entity = f"sensor.{HILO_ENERGY_TOTAL}_{tarif}"
+            energy_entity = f"sensor.{self._hilo.total_meter_key}_{tarif}"
             energy_state = self._hilo._hass.states.get(energy_entity)
             if energy_state is None or energy_state.state in ("unknown", "unavailable"):
                 continue
@@ -1445,7 +1454,7 @@ class HiloCostTotalSensor(HiloEntity, SensorEntity):
         for tarif in ["low", "medium", "high"]:
             rate = self.tariff_config.get(tarif, 0)
             if rate > 0:
-                energy_entity = f"sensor.{HILO_ENERGY_TOTAL}_{tarif}"
+                energy_entity = f"sensor.{self._hilo.total_meter_key}_{tarif}"
                 energy_state = self._hilo._hass.states.get(energy_entity)
                 kwh = 0.0
                 if energy_state is not None and energy_state.state not in (
