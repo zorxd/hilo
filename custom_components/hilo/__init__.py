@@ -623,7 +623,7 @@ class Hilo:
             for device in updated_devices:
                 async_dispatcher_send(
                     self._hass,
-                    SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, device.id),
+                    SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, device.hilo_id),
                 )
 
         elif event.target == "DeviceListInitialValuesReceived":
@@ -658,7 +658,7 @@ class Hilo:
             for device in updated_devices:
                 async_dispatcher_send(
                     self._hass,
-                    SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, device.id),
+                    SIGNAL_UPDATE_ENTITY.format(self.entry.entry_id, device.hilo_id),
                 )
 
     @callback
