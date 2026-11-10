@@ -106,7 +106,7 @@ To connect another Hilo account, repeat these steps and sign in with that accoun
 Then restart Home Assistant.
 
 ### 3️⃣ Clean up (optional)
-- Delete `hilo_state.yaml` and `hilo_eventhistory_state.yaml` from the Home Assistant configuration folder. `hilo_state.yaml` contains your Hilo login tokens.
+- Delete the `hilo_state_*.yaml` and `hilo_eventhistory_state_*.yaml` files from the Home Assistant configuration folder (one pair per Hilo account). Deleting an account's entry keeps its files so it resumes if you add the account back. The `hilo_state_*.yaml` files contain your Hilo login tokens.
 - If you added `utility_meter:` to `configuration.yaml` only for Hilo, remove that line.
 - Remove the Hilo meters from the **Energy** dashboard.
 

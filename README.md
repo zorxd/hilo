@@ -106,7 +106,7 @@ Pour connecter un autre compte Hilo, répétez ces étapes et connectez-vous ave
 Redémarrez ensuite Home Assistant.
 
 ### 3️⃣ Nettoyage (optionnel)
-- Supprimez `hilo_state.yaml` et `hilo_eventhistory_state.yaml` du dossier de configuration de Home Assistant. `hilo_state.yaml` contient vos jetons de connexion Hilo.
+- Supprimez les fichiers `hilo_state_*.yaml` et `hilo_eventhistory_state_*.yaml` du dossier de configuration de Home Assistant (une paire par compte Hilo). La suppression d'un compte conserve ses fichiers pour qu'il reprenne si vous l'ajoutez de nouveau. Les fichiers `hilo_state_*.yaml` contiennent vos jetons de connexion Hilo.
 - Si vous avez ajouté `utility_meter:` à `configuration.yaml` uniquement pour Hilo, retirez cette ligne.
 - Retirez les compteurs Hilo du tableau de bord **Énergie**.
 
